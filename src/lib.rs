@@ -329,6 +329,18 @@ impl<T, M> Iterator for HashRingIterator<T, M> {
     }
 }
 
+pub struct HashRingNodeIterator<T, M> {
+    ring: std::vec::IntoIter<Node<T, M>>,
+}
+
+impl<T, M> Iterator for HashRingNodeIterator<T, M> {
+    type Item = Node<T, M>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.ring.next()
+    }
+}
+
 impl<T, M> IntoIterator for HashRing<T, M> {
     type Item = T;
 
@@ -336,6 +348,14 @@ impl<T, M> IntoIterator for HashRing<T, M> {
 
     fn into_iter(self) -> Self::IntoIter {
         HashRingIterator {
+            ring: self.ring.into_iter(),
+        }
+    }
+}
+
+impl<T, M> HashRing<T, M> {
+    pub fn into_node_iter(self) -> HashRingNodeIterator<T, M> {
+        HashRingNodeIterator {
             ring: self.ring.into_iter(),
         }
     }

@@ -157,7 +157,7 @@ pub struct HashRing<T, M = (), S = DefaultHashBuilder> {
     ring: Vec<Node<T, M>>,
 }
 
-impl<T> Default for HashRing<T> {
+impl<T, M> Default for HashRing<T, M> {
     fn default() -> Self {
         HashRing {
             hash_builder: DefaultHashBuilder,
@@ -169,9 +169,9 @@ impl<T> Default for HashRing<T> {
 /// Hash Ring
 ///
 /// A hash ring that provides consistent hashing for nodes that are added to it.
-impl<T> HashRing<T> {
+impl<T, M> HashRing<T, M> {
     /// Create a new `HashRing`.
-    pub fn new() -> HashRing<T> {
+    pub fn new() -> HashRing<T, M> {
         Default::default()
     }
 }

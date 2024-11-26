@@ -102,42 +102,59 @@ impl BuildHasher for DefaultHashBuilder {
 // Node is an internal struct used to encapsulate the nodes that will be added and
 // removed from `HashRing`
 #[derive(Clone, Debug)]
-struct Node<T> {
+pub struct Node<T, M> {
     key: u64,
-    node: T,
+    pub node: T,
+    pub meta: Option<M>,
 }
 
-impl<T> Node<T> {
-    fn new(key: u64, node: T) -> Node<T> {
-        Node { key, node }
+impl<T, M> Node<T, M> {
+    fn new(key: u64, node: T) -> Node<T, M> {
+        Node {
+            key,
+            node,
+            meta: None,
+        }
+    }
+
+    fn new_with_meta(key: u64, node: T, meta: Option<M>) -> Node<T, M> {
+        Node { key, node, meta }
+    }
+
+    pub fn replace_meta(&mut self, meta: M) {
+        self.meta.replace(meta);
+    }
+
+    pub fn take_meta(&mut self) -> Option<M> {
+        self.meta.take()
     }
 }
 
 // Implement `PartialEq`, `Eq`, `PartialOrd` and `Ord` so we can sort `Node`s
-impl<T> PartialEq for Node<T> {
-    fn eq(&self, other: &Node<T>) -> bool {
+impl<T, M> PartialEq for Node<T, M> {
+    fn eq(&self, other: &Node<T, M>) -> bool {
         self.key == other.key
     }
 }
 
-impl<T> Eq for Node<T> {}
+impl<T, M> Eq for Node<T, M> {}
 
-impl<T> PartialOrd for Node<T> {
-    fn partial_cmp(&self, other: &Node<T>) -> Option<Ordering> {
+impl<T, M> PartialOrd for Node<T, M> {
+    fn partial_cmp(&self, other: &Node<T, M>) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<T> Ord for Node<T> {
-    fn cmp(&self, other: &Node<T>) -> Ordering {
+impl<T, M> Ord for Node<T, M> {
+    fn cmp(&self, other: &Node<T, M>) -> Ordering {
         self.key.cmp(&other.key)
     }
 }
 
 #[derive(Clone, PartialEq, Debug)]
-pub struct HashRing<T, S = DefaultHashBuilder> {
+pub struct HashRing<T, M = (), S = DefaultHashBuilder> {
     hash_builder: S,
-    ring: Vec<Node<T>>,
+    ring: Vec<Node<T, M>>,
 }
 
 impl<T> Default for HashRing<T> {
@@ -159,9 +176,9 @@ impl<T> HashRing<T> {
     }
 }
 
-impl<T, S> HashRing<T, S> {
+impl<T, M, S> HashRing<T, M, S> {
     /// Creates an empty `HashRing` which will use the given hash builder.
-    pub fn with_hasher(hash_builder: S) -> HashRing<T, S> {
+    pub fn with_hasher(hash_builder: S) -> HashRing<T, M, S> {
         HashRing {
             hash_builder,
             ring: Vec::new(),
@@ -179,11 +196,16 @@ impl<T, S> HashRing<T, S> {
     }
 }
 
-impl<T: Hash, S: BuildHasher> HashRing<T, S> {
+impl<T: Hash, M, S: BuildHasher> HashRing<T, M, S> {
     /// Add `node` to the hash ring.
     pub fn add(&mut self, node: T) {
+        self.add_with_meta(node, None);
+    }
+
+    /// Add `node`, with `meta` option, to the hash ring.
+    pub fn add_with_meta(&mut self, node: T, meta: Option<M>) {
         let key = get_key(&self.hash_builder, &node);
-        self.ring.push(Node::new(key, node));
+        self.ring.push(Node::new_with_meta(key, node, meta));
         self.ring.sort();
     }
 
@@ -207,7 +229,7 @@ impl<T: Hash, S: BuildHasher> HashRing<T, S> {
 
     /// Get the node responsible for `key`. Returns an `Option` that will contain the `node`
     /// if the hash ring is not empty or `None` if it was empty.
-    pub fn get<U: Hash>(&self, key: &U) -> Option<&T> {
+    pub fn get_node<U: Hash>(&self, key: &U) -> Option<&Node<T, M>> {
         if self.ring.is_empty() {
             return None;
         }
@@ -218,11 +240,43 @@ impl<T: Hash, S: BuildHasher> HashRing<T, S> {
             Ok(n) => n,
         };
 
-        if n == self.ring.len() {
-            return Some(&self.ring[0].node);
+        let node = if n == self.ring.len() {
+            &self.ring[0]
+        } else {
+            &self.ring[n]
+        };
+
+        Some(node)
+    }
+
+    /// Get a mutable reference to the node responsible for `key`. Returns an `Option` that will contain the `node`
+    /// if the hash ring is not empty or `None` if it was empty.
+    ///
+    /// Useful for modifying the node's `meta`.
+    pub fn get_node_mut<U: Hash>(&mut self, key: &U) -> Option<&mut Node<T, M>> {
+        if self.ring.is_empty() {
+            return None;
         }
 
-        Some(&self.ring[n].node)
+        let k = get_key(&self.hash_builder, key);
+        let n = match self.ring.binary_search_by(|node| node.key.cmp(&k)) {
+            Err(n) => n,
+            Ok(n) => n,
+        };
+
+        let node = if n == self.ring.len() {
+            &mut self.ring[0]
+        } else {
+            &mut self.ring[n]
+        };
+
+        Some(node)
+    }
+
+    /// Get the node responsible for `key`. Returns an `Option` that will contain the `node`
+    /// if the hash ring is not empty or `None` if it was empty.
+    pub fn get<U: Hash>(&self, key: &U) -> Option<&T> {
+        self.get_node(key).map(|node| &node.node)
     }
 
     /// Get the node responsible for `key` along with the next `replica` nodes after.
@@ -231,6 +285,7 @@ impl<T: Hash, S: BuildHasher> HashRing<T, S> {
     pub fn get_with_replicas<U: Hash>(&self, key: &U, replicas: usize) -> Option<Vec<T>>
     where
         T: Clone + Debug,
+        M: Clone,
     {
         if self.ring.is_empty() {
             return None;
@@ -262,11 +317,11 @@ impl<T: Hash, S: BuildHasher> HashRing<T, S> {
     }
 }
 
-pub struct HashRingIterator<T> {
-    ring: std::vec::IntoIter<Node<T>>,
+pub struct HashRingIterator<T, M> {
+    ring: std::vec::IntoIter<Node<T, M>>,
 }
 
-impl<T> Iterator for HashRingIterator<T> {
+impl<T, M> Iterator for HashRingIterator<T, M> {
     type Item = T;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -274,10 +329,10 @@ impl<T> Iterator for HashRingIterator<T> {
     }
 }
 
-impl<T> IntoIterator for HashRing<T> {
+impl<T, M> IntoIterator for HashRing<T, M> {
     type Item = T;
 
-    type IntoIter = HashRingIterator<T>;
+    type IntoIter = HashRingIterator<T, M>;
 
     fn into_iter(self) -> Self::IntoIter {
         HashRingIterator {
